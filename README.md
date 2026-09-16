@@ -1,3 +1,0 @@
-# Long Shot
-
-Dead-simple offline Progressive Web App that **stitches** screenshots you already took into one tall PNG—because a web app cannot capture other apps’ system UI, so image stitching is the honest, portable approach. Add two or more images (file picker or drag-and-drop), reorder, optionally trim overlap, then tap **Save long shot** to download `long-shot.png` (and share via the Web Share API when the browser supports files). No accounts, ads, analytics, or cloud—works fully offline once installed. Scripts: `npm install`, `npm run dev`, `npm run build`, `npm run preview`. GitHub Pages: `.github/workflows/pages.yml` (npm ci → build → upload `dist` → deploy-pages); `base: './'` so it works from a project subpath.
