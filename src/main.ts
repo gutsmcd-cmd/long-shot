@@ -1,5 +1,13 @@
 import './style.css';
-import { planStitch, stitchToPng } from './stitch';
+import './meter.css';
+import {
+  planStitch,
+  splitParts,
+  shotsPerImage,
+  stitchToPngs,
+  TYPICAL_SHOT,
+  WARN_FRACTION,
+} from './stitch';
 
 interface Shot {
   id: string;
@@ -81,26 +89,119 @@ function clearAll(): void {
   render();
 }
 
-function previewSizeLabel(): string {
-  if (shots.length < 2) return '';
+const fmt = (n: number): string => n.toLocaleString('en-US');
+
+/** Live height meter + limit warning + "how many fit" hint. */
+function meterHtml(): string {
   const plan = planStitch(
     shots.map((s) => s.img),
     overlap,
   );
-  return `${plan.targetWidth} × ${plan.totalHeight} px`;
+
+  // Hint: based on the median added screenshot, or a typical 1080×2400 phone shot.
+  let refW = TYPICAL_SHOT.width;
+  let refH = TYPICAL_SHOT.height;
+  if (shots.length) {
+    const sorted = [...shots].sort(
+      (a, b) =>
+        a.img.naturalHeight / a.img.naturalWidth -
+        b.img.naturalHeight / b.img.naturalWidth,
+    );
+    const mid = sorted[Math.floor(sorted.length / 2)]!.img;
+    refW = mid.naturalWidth;
+    refH = mid.naturalHeight;
+  }
+  const fit = shotsPerImage(refW, refH, overlap, plan.targetWidth || refW);
+  const hint =
+    fit.perImage > 0
+      ? `About ${fit.perImage} screenshots of ${refW}×${refH} fit in one image${shots.length ? '' : ' (typical phone size)'}.`
+      : `A ${refW}×${refH} screenshot is taller than one image can be — it will be split.`;
+
+  if (shots.length === 0) {
+    return `<div class="meter-hint">${hint}</div>`;
+  }
+
+  const limit = plan.maxHeight;
+  const total = plan.totalHeight;
+  const ratio = total / limit;
+  const pct = Math.min(100, Math.round(ratio * 100));
+  const level = ratio > 1 ? 'over' : ratio >= WARN_FRACTION ? 'warn' : 'ok';
+  let note = '';
+  if (level === 'over') {
+    const parts = splitParts(plan);
+    const mid = parts.some((p) => p.cutMidShot);
+    note = `Over the ${fmt(limit)} px limit — Long Shot will save ${parts.length} images (part 1–${parts.length}), split ${mid ? 'at screenshot edges where possible' : 'at screenshot edges'}.`;
+  } else if (level === 'warn') {
+    note = `Close to the ${fmt(limit)} px limit. Add more and it will be saved as several images.`;
+  }
+
+  return `
+    <div class="meter meter-${level}">
+      <div class="row">
+        <span>Output height</span>
+        <span class="value">${fmt(total)} / ${fmt(limit)} px</span>
+      </div>
+      <div class="meter-bar" role="meter" aria-label="Output height" aria-valuemin="0" aria-valuemax="${limit}" aria-valuenow="${Math.min(total, limit)}">
+        <span style="width:${pct}%"></span>
+      </div>
+      <div class="meter-sub">${fmt(plan.targetWidth)} px wide${shots.length < 2 ? ' · add at least 2 screenshots' : ''}</div>
+      ${note ? `<div class="meter-note" role="status">${note}</div>` : ''}
+    </div>
+    <div class="meter-hint">${hint}</div>`;
+}
+
+function updateMeter(): void {
+  const el = document.getElementById('meter');
+  if (el) el.innerHTML = meterHtml();
+}
+
+function downloadBlob(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 async function saveLongShot(): Promise<void> {
   if (busy || shots.length < 2) return;
   busy = true;
-  render(null, 'Stitching…');
-
-  try {
-    const blob = await stitchToPng(
+  const plannedParts = splitParts(
+    planStitch(
       shots.map((s) => s.img),
       overlap,
+    ),
+  ).length;
+  render(
+    null,
+    plannedParts > 1
+      ? `Too tall for one image — splitting into ${plannedParts} parts…`
+      : 'Stitching…',
+  );
+
+  try {
+    const result = await stitchToPngs(
+      shots.map((s) => s.img),
+      overlap,
+      (done, total) => {
+        const st = document.getElementById('status');
+        if (st && total > 1 && done < total) {
+          st.textContent = `Too tall for one image — making part ${done + 1} of ${total}…`;
+        }
+      },
     );
-    const file = new File([blob], 'long-shot.png', { type: 'image/png' });
+    const n = result.blobs.length;
+    const names =
+      n === 1
+        ? ['long-shot.png']
+        : result.blobs.map((_, i) => `long-shot-part-${i + 1}-of-${n}.png`);
+    const files = result.blobs.map(
+      (b, i) => new File([b], names[i]!, { type: 'image/png' }),
+    );
 
     let shared = false;
     if (
@@ -108,11 +209,11 @@ async function saveLongShot(): Promise<void> {
       typeof navigator.canShare === 'function'
     ) {
       try {
-        if (navigator.canShare({ files: [file] })) {
+        if (navigator.canShare({ files })) {
           await navigator.share({
-            files: [file],
+            files,
             title: 'Long Shot',
-            text: 'Stitched screenshot',
+            text: n === 1 ? 'Stitched screenshot' : `Stitched screenshot (${n} parts)`,
           });
           shared = true;
         }
@@ -125,19 +226,27 @@ async function saveLongShot(): Promise<void> {
     }
 
     if (!shared) {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'long-shot.png';
-      a.rel = 'noopener';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      for (let i = 0; i < n; i++) {
+        downloadBlob(result.blobs[i]!, names[i]!);
+        if (i < n - 1) await new Promise((r) => setTimeout(r, 350));
+      }
     }
 
     busy = false;
-    render(null, shared ? 'Shared.' : 'Downloaded long-shot.png');
+    const splitNote =
+      n > 1
+        ? ` It was taller than the ${fmt(result.maxHeight)} px limit, so it was split into ${n} images (part 1–${n}).`
+        : '';
+    render(
+      null,
+      (shared
+        ? n > 1
+          ? `Shared ${n} images.`
+          : 'Shared.'
+        : n > 1
+          ? `Downloaded ${names.join(', ')}.`
+          : 'Downloaded long-shot.png') + splitNote,
+    );
   } catch (e) {
     busy = false;
     render(e instanceof Error ? e.message : String(e));
@@ -146,7 +255,6 @@ async function saveLongShot(): Promise<void> {
 
 function render(error: string | null = null, status: string | null = null): void {
   const canSave = shots.length >= 2 && !busy;
-  const sizeHint = previewSizeLabel();
 
   app.innerHTML = `
     <header>
@@ -168,7 +276,7 @@ function render(error: string | null = null, status: string | null = null): void
         </span>
         <input type="range" id="overlap" min="0" max="80" step="1" value="${overlap}" ${shots.length < 2 ? 'disabled' : ''} />
       </label>
-      ${sizeHint ? `<div class="status">Preview size: ${sizeHint}</div>` : ''}
+      <div id="meter">${meterHtml()}</div>
     </div>
 
     ${error ? `<div class="error" role="alert">${escapeHtml(error)}</div>` : ''}
@@ -276,22 +384,7 @@ function wire(): void {
     const val = document.getElementById('overlap-val');
     if (val) val.textContent = `${overlap}px`;
     const status = document.getElementById('status');
-    const hint = previewSizeLabel();
-    // Update preview size line inside controls without full re-render
-    const controls = overlapInput.closest('.controls');
-    if (controls) {
-      let sizeEl = controls.querySelector('.status');
-      if (hint) {
-        if (!sizeEl) {
-          sizeEl = document.createElement('div');
-          sizeEl.className = 'status';
-          controls.appendChild(sizeEl);
-        }
-        sizeEl.textContent = `Preview size: ${hint}`;
-      } else if (sizeEl) {
-        sizeEl.remove();
-      }
-    }
+    updateMeter();
     if (status && !busy) status.textContent = '';
   });
 

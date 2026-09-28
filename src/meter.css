@@ -1,0 +1,52 @@
+.meter {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.meter .value {
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.meter-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.meter-warn .meter-bar > span {
+  background: #fbbf24;
+}
+
+.meter-over .meter-bar > span {
+  background: var(--danger);
+}
+
+.meter-sub,
+.meter-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.meter-hint {
+  margin-top: 6px;
+}
+
+.meter-note {
+  font-size: 0.85rem;
+  color: #fbbf24;
+}
+
+.meter-over .meter-note {
+  color: var(--danger);
+}
